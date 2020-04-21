@@ -3,15 +3,16 @@ struct
 
 
 (* SMT-LIB logic *)
-local
-  fun is_float (Type ("IEEE.float", [_,_])) = true
-    | is_float _                            = false
-in
+
 fun smtlib_logic ts =
-  if exists (Term.exists_type (Term.exists_subtype is_float)) ts
-  then SOME "ALL"
-  else NONE
-end
+  let
+    fun is_float (Type ("IEEE.float", [_,_])) = true
+      | is_float _                            = false
+  in
+    if exists (Term.exists_type (Term.exists_subtype is_float)) ts then
+      SOME "ALL" else
+      NONE
+  end
 
 
 (* SMT-LIB and Z3 built-ins *)

@@ -18,22 +18,27 @@ fun smtlib_logic ts =
 (* SMT-LIB and Z3 built-ins *)
 
 local
-  fun real_num _ i = SOME (string_of_int i ^ ".0")
-  
-(*
-  fun is_linear [t] = SMT_Util.is_number t
-    | is_linear [t, u] = SMT_Util.is_number t orelse SMT_Util.is_number u
-    | is_linear _ = false
 
-  fun mk_times ts = Term.list_comb (@{const times ('a lst)}, ts)
+  fun typ_template args = "(_ FloatingPoint " ^ string_of_int (fst args) ^
+                            " " ^ string_of_int (snd args + 1) ^ ")"
 
-  fun times _ _ ts = if is_linear ts then SOME ("*", 2, ts, mk_times) else NONE
-*)
+  (*NOT DONE*)
+  fun num_template _ = "(fp " ^ ")"
+
+  fun float_typ (Type ("IEEE.float", [e,f])) =
+      Option.map (rpair [] o typ_template)
+        (try (apply2 Word_Lib.dest_binT) (e,f))
+    | float_typ _ = NONE
+
+  (*NOT DONE*)
+  fun float_num (Type ("IEEE.float", [_,_])) i = SOME (num_template i)
+    | float_num _ _ = NONE
+
 in
 
 val setup_builtins =
   SMT_Builtin.add_builtin_typ SMTLIB_Interface.smtlibC
-    (\<^typ>\<open>('e,'f) float\<close>, K (SOME ("FakedType", [])), real_num) #>
+    (\<^typ>‹('e,'f) float›, float_typ, float_num) #>
   fold (SMT_Builtin.add_builtin_fun' SMTLIB_Interface.smtlibC) [
     (@{const less (real)}, "<"),
     (@{const less_eq (real)}, "<="),

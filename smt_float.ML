@@ -2,15 +2,13 @@ structure SMT_Float: sig end =
 struct
 
 (* Helpers *)
-(* TODO: Tidy up *)
 fun is_float (Type (\<^type_name>‹IEEE.float›, [e,f])) =
       can (apply2 Word_Lib.dest_binT) (e,f) andalso
       Word_Lib.dest_binT e > 1 andalso Word_Lib.dest_binT f > 1
   | is_float _ = false
 
-fun float_Targs (Type (\<^type_name>‹IEEE.float›, [e,f])) =
-      if can (apply2 Word_Lib.dest_binT) (e,f) andalso
-      Word_Lib.dest_binT e > 1 andalso Word_Lib.dest_binT f > 1 then
+fun float_Targs (T as (Type (\<^type_name>‹IEEE.float›, [e,f]))) =
+      if is_float T then
         SOME (Word_Lib.dest_binT e, Word_Lib.dest_binT f)
       else
         NONE
@@ -18,6 +16,7 @@ fun float_Targs (Type (\<^type_name>‹IEEE.float›, [e,f])) =
 
 
 (* SMT-LIB logic *)
+(* TODO: Check for rounding modes *)
 fun smtlib_logic ts =
       if exists (Term.exists_type (Term.exists_subtype is_float)) ts then
         SOME "ALL"
@@ -28,10 +27,11 @@ fun smtlib_logic ts =
 (* SMT-LIB built-ins *)
 local
 
-  fun typ_template args = "(_ FloatingPoint " ^ string_of_int (fst args) ^
-                            " " ^ string_of_int (snd args + 1) ^ ")"
+  fun sort_template s args = "(_ " ^ s ^ " " ^ string_of_int (fst args) ^
+                               " " ^ string_of_int (snd args + 1) ^ ")"
 
-  fun float_typ T = Option.map (rpair [] o typ_template) (float_Targs T)
+  fun float_typ T =
+    Option.map (rpair [] o sort_template "FloatingPoint") (float_Targs T)
 
   fun extract_words trip =
     let
@@ -51,6 +51,24 @@ local
     else
       NONE
 
+  fun add_float_fun f (t, s) =
+    let
+      val (n, _) = Term.dest_Const t
+    in
+      SMT_Builtin.add_builtin_fun SMTLIB_Interface.smtlibC
+        (Term.dest_Const t, f n s)
+    end
+
+  fun add_Targs n s _ T ts =
+    let
+      val (Us, U) = Term.strip_type T
+    in
+      case float_Targs U of
+        SOME (e,f) => SOME (sort_template s (e,f), length Us, ts,
+          Term.list_comb o pair (Const (n, T)))
+      | NONE       => NONE
+    end
+
 in
 
 val setup_builtins =
@@ -67,13 +85,17 @@ val setup_builtins =
       @{typ "1 word ⇒ 'e word ⇒ 'f word ⇒ ('e, 'f) IEEE.float"}), "fp") #>
 
 
-  (* TODO: Interpret operation only if type arguments are fixed *)
+  (* TODO: Interpret only if type arguments are fixed *)
 
   (* Special values *)
-  
+  (* TODO: Interpret 1 *)
+  fold (add_float_fun add_Targs) [
+    (@{const zero_class.zero (‹('e,'f) float›)}, "+zero"),
+    (\<^term>‹plus_infinity :: ('e::len, 'f::len) float›, "+oo"),
+    (\<^term>‹some_nan :: ('e::len, 'f::len) float›, "NaN")] #>
 
   (* Classification *)
-  (* TODO: Add positivity and negativity *)
+  (* TODO: Add positivity and negativity to the theory *)
   fold (SMT_Builtin.add_builtin_fun' SMTLIB_Interface.smtlibC) [
     (\<^term>‹is_zero :: ('e::len, 'f::len) float ⇒ _›, "fp.isZero"),
     (\<^term>‹is_infinity :: ('e::len, 'f::len) float ⇒ _›, "fp.isInfinite"),
@@ -82,7 +104,7 @@ val setup_builtins =
     (\<^term>‹is_denormal :: ('e::len, 'f::len) float ⇒ _›, "fp.isSubnormal")] #>
 
   (* Rounding modes *)
-  (* TODO: Add RNA *)
+  (* TODO: Add RNA to the theory *)
   SMT_Builtin.add_builtin_typ SMTLIB_Interface.smtlibC
     (\<^typ>‹roundmode›, K (SOME ("RoundingMode", [])), K (K NONE)) #>
   fold (SMT_Builtin.add_builtin_fun' SMTLIB_Interface.smtlibC) [
@@ -94,8 +116,7 @@ val setup_builtins =
   (* Arithmetic operations *)
   (* TODO: Add instantiated versions,
            Add remainder op,
-           Add min and max ops,
-           Check for linearity *)
+           Add min and max ops to the theory *)
   fold (SMT_Builtin.add_builtin_fun' SMTLIB_Interface.smtlibC) [
     (@{const abs (‹('e,'f) float›)},"fp.abs"),
     (@{const uminus (‹('e,'f) float›)},"fp.neg")] #>
@@ -107,7 +128,6 @@ val setup_builtins =
     (\<^term>‹fmul_add :: roundmode ⇒ ('e::len, 'f::len) float ⇒ _›, "fp.fma"),
     (\<^term>‹fsqrt :: roundmode ⇒ ('e::len, 'f::len) float ⇒ _›, "fp.sqrt"),
     (\<^term>‹fintrnd :: roundmode ⇒ ('e::len, 'f::len) float ⇒ _›, "fp.roundToIntegral")] #>
-
 
   (* Comparison operations *)
   fold (SMT_Builtin.add_builtin_fun' SMTLIB_Interface.smtlibC) [
@@ -122,18 +142,19 @@ val setup_builtins =
     (@{const less (‹('e,'f) float›)},"fp.lt")] #>
 
   (* Type conversion *)
-  (* Add non-real conversions *)
-  fold (SMT_Builtin.add_builtin_fun' SMTLIB_Interface.smtlibC) [
-    (\<^term>‹valof :: ('e::len, 'f::len) float ⇒ _›, "fp.to_real")]
+  (* TODO: Add non-real conversions to the theory *)
+  SMT_Builtin.add_builtin_fun' SMTLIB_Interface.smtlibC
+    (\<^term>‹valof :: ('e::len, 'f::len) float ⇒ _›, "fp.to_real") #>
+  add_float_fun add_Targs
+    (\<^term>‹round :: roundmode ⇒ real ⇒ ('e::len, 'f::len) float›, "to_fp")
 
 end
 
 
 (* setup *)
-(* TODO: Investigate precedence constant *)
-
+(* TODO: Investigate priority number *)
 val _ = Theory.setup (Context.theory_map (
-  SMTLIB_Interface.add_logic (11, smtlib_logic) #>
+  SMTLIB_Interface.add_logic (0, smtlib_logic) #>
   setup_builtins))
 
 end;

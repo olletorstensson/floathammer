@@ -41,6 +41,14 @@ local
   fun float_typ T =
     Option.map (rpair [] o sort_template "FloatingPoint") (float_Targs T)
 
+  fun add_float_fun f (t, s) =
+    let
+      val (n, _) = Term.dest_Const t
+    in
+      SMT_Builtin.add_builtin_fun SMTLIB_Interface.smtlibC
+        (Term.dest_Const t, f n s)
+    end
+
   fun extract_words trip =
     let
       val ((_, s), c) = apfst Term.dest_comb (Term.dest_comb trip)
@@ -51,20 +59,15 @@ local
 
   fun mk_floatS c [s, e, f] = Const c $ s $ e $ f
     | mk_floatS c ts = raise TERM ("bad arguments", Const c :: ts)
-
-  fun const_val _ T ts =
-    if is_float (Term.body_type T) then
-      SOME ("SOMETHING", 3, extract_words (hd ts), mk_floatS ("Abs_float",
-        @{typ "1 word ⇒ 'e word ⇒ 'f word ⇒ ('e, 'f) IEEE.float"}))
-    else
-      NONE
-
-  fun add_float_fun f (t, s) =
+  
+  fun add_constval _ s _ T ts =
     let
-      val (n, _) = Term.dest_Const t
+      val newT = @{typ "1 word ⇒ 'e word ⇒ 'f word ⇒ ('e, 'f) IEEE.float"}
     in
-      SMT_Builtin.add_builtin_fun SMTLIB_Interface.smtlibC
-        (Term.dest_Const t, f n s)
+      if is_float (Term.body_type T) then
+        SOME (s, 3, extract_words (hd ts), mk_floatS ("Abs_float_dummy", newT))
+      else
+        NONE
     end
 
   fun add_with_none n s _ T ts =
@@ -113,6 +116,19 @@ local
         (true, SOME c) => SOME (s, length Us + 1, mode::ts, Term.list_comb o pair c)
       | _ => NONE
     end
+  
+  fun add_frem _ s _ T ts =
+    let
+      val (Us, U) = Term.strip_type T
+      val all_valid = forall is_valid_type (U::Us)
+      val newT = (tl Us) ---> U
+      val c = Const (\<^const_name>‹IEEE.float_rem›, newT)
+    in
+      if all_valid then
+        SOME (s, length Us - 1, tl ts, Term.list_comb o pair c)
+      else
+        NONE
+    end
 
 in
 
@@ -123,22 +139,19 @@ val setup_builtins =
     (\<^typ>‹('e::len,'f::len) float›, float_typ, K (K NONE)) #>
   
   (* Constant values *)
-  (* TODO: Tidy up + interpret only when args fixed *)
-  SMT_Builtin.add_builtin_fun SMTLIB_Interface.smtlibC
-    (Term.dest_Const @{const IEEE.Abs_float ('e,'f)}, const_val) #>
+  add_float_fun add_constval
+    (@{const IEEE.Abs_float ('e,'f)}, "SOMETHING") #>
   SMT_Builtin.add_builtin_fun' SMTLIB_Interface.smtlibC
-    (Const ("Abs_float",
+    (Const ("Abs_float_dummy",
       @{typ "1 word ⇒ 'e word ⇒ 'f word ⇒ ('e, 'f) IEEE.float"}), "fp") #>
 
   (* Special values *)
-  (* TODO: Interpret 1 *)
   fold (add_float_fun add_with_Targs) [
     (@{const zero_class.zero (‹('e,'f) float›)}, "+zero"),
     (@{const IEEE.plus_infinity (‹'e::len›,‹'f::len›)}, "+oo"),
     (@{const IEEE.some_nan (‹'e::len›,‹'f::len›)}, "NaN")] #>
 
   (* Classification *)
-  (* TODO: Add positivity and negativity to the theory *)
   fold (add_float_fun add_with_none) [
     (@{const IEEE.is_zero (‹'e::len›,‹'f::len›)}, "fp.isZero"),
     (@{const IEEE.is_infinity (‹'e::len›,‹'f::len›)}, "fp.isInfinite"),
@@ -157,8 +170,6 @@ val setup_builtins =
     (@{const IEEE.To_nearest_away}, "RNA")] #>
 
   (* Arithmetic operations *)
-  (* TODO: Add remainder op,
-           Add min and max ops to the theory *)
   fold (add_float_fun add_with_none) [
     (@{const abs (‹('e,'f) float›)},"fp.abs"),
     (@{const uminus (‹('e,'f) float›)},"fp.neg"),
@@ -176,6 +187,10 @@ val setup_builtins =
     (@{const divide (‹('e,'f) float›)}, "SOMETHING"),
     (@{const IEEE.float_sqrt (‹'e::len›,‹'f::len›)}, "SOMETHING"),
     (@{const IEEE.ROUNDFLOAT (‹'e::len›,‹'f::len›)}, "SOMETHING")] #>
+  add_float_fun add_frem
+    (@{const IEEE.frem (‹'e::len›,‹'f::len›)}, "SOMETHING") #>
+  add_float_fun add_with_none
+    (@{const IEEE.float_rem (‹'e::len›,‹'f::len›)}, "fp.rem") #>
 
   (* Comparison operations *)
   fold (add_float_fun add_with_none) [
@@ -189,7 +204,6 @@ val setup_builtins =
     (@{const IEEE.float_eq (‹'e::len›,‹'f::len›)}, "fp.eq")] #>
 
   (* Type conversion *)
-  (* TODO: Add non-real conversions to the theory *)
   add_float_fun add_with_none
     (@{const IEEE.valof (‹'e::len›,‹'f::len›)}, "fp.to_real") #>
   add_float_fun add_with_Targs
@@ -199,7 +213,6 @@ end
 
 
 (* setup *)
-(* TODO: Investigate priority number *)
 val _ = Theory.setup (Context.theory_map (
   SMTLIB_Interface.add_logic (0, smtlib_logic) #>
   setup_builtins))
